@@ -42,8 +42,18 @@
 
 
 -spec erase(key(), view()) -> multi_dict().
-erase(_Key, _View) ->
-    erlang:error(unimplemented).
+erase(Key, View) ->
+    Dict = View#multi_dict_view.dict,
+    case dict:find(Key, View#multi_dict_view.indexed) of
+        {ok, Id} ->
+            Value = dict:fetch(Id, Dict#multi_dict.tuples),
+            Dict#multi_dict{
+                indices = dict:map(fun(Index, KeyIdDict) ->
+                            dict:erase(key_from_tuple(Index, Value),
+                                KeyIdDict) end, Dict#multi_dict.indices),
+                tuples = dict:erase(Id, Dict#multi_dict.tuples)};
+        error -> Dict
+    end.
 
 -spec fetch(key(), view()) -> tuple().
 fetch(Key, View) ->
@@ -63,8 +73,12 @@ filter(_Pred, _DictOrView) ->
 
 -spec find(key(), view()) ->
     {'ok', tuple()} | 'error'.
-find(_Key, _View) ->
-    erlang:error(unimplemented).
+find(Key, View) ->
+    case dict:find(Key, View#multi_dict_view.indexed) of
+        {ok, Id} ->
+            {ok, dict:find(Id, (View#multi_dict_view.dict)#multi_dict.tuples)};
+        error -> error
+    end.
 
 -spec fold(fun((tuple(), term()) -> term()), term(),
             multi_dict() | view()) -> term().
@@ -80,8 +94,8 @@ from_view(View) ->
     View#multi_dict_view.dict.
 
 -spec is_key(key(), view()) -> boolean().
-is_key(_Key, _View) ->
-    erlang:error(unimplemented).
+is_key(Key, View) ->
+    dict:is_key(Key, View#multi_dict_view.indexed).
 
 -spec map(fun((tuple()) -> tuple()), multi_dict() | view()) -> multi_dict().
 map(_Fun, _Dict) ->
@@ -98,8 +112,8 @@ size(DictOrView) ->
     dict_fun_wrap(fun size_dict/1, DictOrView).
 
 -spec store(tuple(), multi_dict() | view()) -> multi_dict().
-store(_Value, _Dict) ->
-    erlang:error(unimplemented).
+store(Value, DictOrView) ->
+    dict_fun_wrap(fun(Dict) -> store_dict(Value, Dict) end, DictOrView).
 
 -spec to_list(multi_dict() | view()) -> list().
 to_list(DictOrView) ->
@@ -155,6 +169,10 @@ add_option({default_index, Index, Name}, Dict) ->
 add_option(_, _) ->
     erlang:error(badarg).
 
+any_index(Dict) ->
+    [Index | _] = dict:fetch_keys(Dict#multi_dict.indices),
+    Index.
+
 assert_default_not_undefined(Dict) ->
     if Dict#multi_dict.default /= undefined -> ok;
         true -> erlang:error(badarg)
@@ -170,13 +188,27 @@ dict_fun_wrap(Fun, Dict) when is_record(Dict, multi_dict) ->
 dict_fun_wrap(Fun, View) when is_record(View, multi_dict_view) ->
     Fun(View#multi_dict_view.dict).
 
+key_from_tuple(Index, Tuple) when is_integer(Index) ->
+    element(Index, Tuple);
+key_from_tuple(Indices, Tuple) when is_list(Indices) ->
+    lists:map(fun(Index) -> element(Index, Tuple) end, Indices).
+
 make_unique() ->
     {now(), self(), random:uniform()}.
 
--spec size_dict(multi_dict()) -> integer().
 size_dict(Dict) ->
     dict:size(Dict#multi_dict.tuples).
 
--spec to_list_dict(multi_dict()) -> list().
+store_dict(Value, InDict) ->
+    AnyIndex = any_index(InDict),
+    AnyView = view(AnyIndex, InDict),
+    Dict = erase(key_from_tuple(AnyIndex, Value), AnyView),
+    Id = make_unique(),
+    Dict#multi_dict{
+        indices = dict:map(fun(Index, KeyIdDict) ->
+                    dict:store(key_from_tuple(Index, Value), Id, KeyIdDict) end,
+            Dict#multi_dict.indices),
+        tuples = dict:store(Id, Value, Dict#multi_dict.tuples)}.
+
 to_list_dict(Dict) ->
     dict:to_list(Dict#multi_dict.tuples).
