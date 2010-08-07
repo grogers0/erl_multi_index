@@ -211,4 +211,5 @@ store_dict(Value, InDict) ->
         tuples = dict:store(Id, Value, Dict#multi_dict.tuples)}.
 
 to_list_dict(Dict) ->
-    dict:to_list(Dict#multi_dict.tuples).
+    {_, List} = lists:unzip(dict:to_list(Dict#multi_dict.tuples)),
+    List.
