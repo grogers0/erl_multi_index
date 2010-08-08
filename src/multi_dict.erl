@@ -92,8 +92,8 @@ fetch_keys(View) ->
 
 -spec filter(fun((tuple()) -> boolean()), multi_dict() | view()) ->
             multi_dict().
-filter(_Pred, _DictOrView) ->
-    erlang:error(unimplemented).
+filter(Pred, DictOrView) ->
+    dict_fun_wrap(fun(Dict) -> filter_dict(Pred, Dict) end, DictOrView).
 
 -spec find(key(), view()) ->
     {'ok', tuple()} | 'error'.
@@ -104,14 +104,14 @@ find(Key, View) ->
         error -> error
     end.
 
--spec fold(fun((tuple(), term()) -> term()), term(),
-            multi_dict() | view()) -> term().
-fold(_Fun, _Acc0, _DictOrView) ->
-    erlang:error(unimplemented).
+-spec fold(fun((tuple(), term()) -> term()), term(), multi_dict() | view()) ->
+            term().
+fold(Fun, Acc, DictOrView) ->
+    dict_fun_wrap(fun(Dict) -> fold_dict(Fun, Acc, Dict) end, DictOrView).
 
 -spec from_list([tuple()], [option()]) -> multi_dict().
-from_list(_List, _Opts) ->
-    erlang:error(unimplemented).
+from_list(List, Opts) ->
+    lists:foldl(fun(Value, Dict) -> store(Value, Dict) end, new(Opts), List).
 
 -spec from_view(view()) -> multi_dict().
 from_view(View) ->
@@ -122,8 +122,8 @@ is_key(Key, View) ->
     dict:is_key(Key, View#multi_dict_view.indexed).
 
 -spec map(fun((tuple()) -> tuple()), multi_dict() | view()) -> multi_dict().
-map(_Fun, _Dict) ->
-    erlang:error(unimplemented).
+map(Fun, DictOrView) ->
+    dict_fun_wrap(fun(Dict) -> map_dict(Fun, Dict) end, DictOrView).
 
 -spec new([option()]) -> multi_dict().
 new(Opts) ->
@@ -219,6 +219,24 @@ dict_fun_wrap(Fun, Dict) when is_record(Dict, multi_dict) ->
 dict_fun_wrap(Fun, View) when is_record(View, multi_dict_view) ->
     Fun(View#multi_dict_view.dict).
 
+erase_all(Dict) ->
+    Dict#multi_dict{
+        indices = dict:map(fun(_K, _V) -> dict:new() end, Dict#multi_dict.indices),
+        tuples = dict:new()}.
+
+filter_dict(Pred, Dict) ->
+    fold_dict(fun(Value, Acc) ->
+                case Pred(Value) of
+                    true -> Acc;
+                    _ -> AnyIndex = any_index(Dict),
+                        AnyView = view(AnyIndex, Dict),
+                        erase(key_from_tuple(AnyIndex, Value), AnyView)
+                end
+        end, Dict, Dict).
+
+fold_dict(Fun, Acc, Dict) ->
+    dict:fold(fun(_K, V, A) -> Fun(V, A) end, Acc, Dict#multi_dict.tuples).
+
 key_from_tuple(Index, Tuple) when is_integer(Index) ->
     element(Index, Tuple);
 key_from_tuple(Indices, Tuple) when is_list(Indices) ->
@@ -226,6 +244,9 @@ key_from_tuple(Indices, Tuple) when is_list(Indices) ->
 
 make_unique() ->
     {now(), self(), random:uniform()}.
+
+map_dict(Fun, Dict) ->
+    fold(fun(Value, Acc) -> store(Fun(Value), Acc) end, erase_all(Dict), Dict).
 
 size_dict(Dict) ->
     dict:size(Dict#multi_dict.tuples).
