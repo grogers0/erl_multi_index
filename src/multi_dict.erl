@@ -120,12 +120,19 @@ to_list(DictOrView) ->
     dict_fun_wrap(fun to_list_dict/1, DictOrView).
 
 -spec update(key(), fun((tuple()) -> tuple()), view()) -> multi_dict().
-update(_Key, _Fun, _Dict) ->
-    erlang:error(unimplemented).
+update(Key, Fun, View) ->
+    Value1 = fetch(Key, View),
+    Value2 = Fun(Value1),
+    store(Value2, View#multi_dict_view.dict).
 
 -spec update(key(), fun((tuple()) -> tuple()), tuple(), view()) -> multi_dict().
-update(_Key, _Fun, _Initial, _Dict) ->
-    erlang:error(unimplemented).
+update(Key, Fun, Initial, View) ->
+    Value1 = case find(Key, View) of
+        {ok, Value} -> Value;
+        error -> Initial
+    end,
+    Value2 = Fun(Value1),
+    store(Value2, View#multi_dict_view.dict).
 
 -spec view(multi_dict()) -> view().
 view(Dict) ->
