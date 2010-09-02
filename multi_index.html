@@ -1,0 +1,259 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<title>Module multi_index</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module multi_index</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Multi index implements a key - value dictionary which stores values  
+based on multiple keys.
+
+<p><b>Authors:</b> Gregory Rogers (<a href="mailto:greg.r.rogers@gmail.com"><tt>greg.r.rogers@gmail.com</tt></a>).</p>
+
+<h2><a name="description">Description</a></h2><p>Multi index implements a key - value dictionary which stores values  
+based on multiple keys. Multi index only stores values, the keys used for  
+indices are derived from the values by user defined key functions. There can  
+be multiple indices, and it is possible to look up values based on any of  
+these indices. A common use case is to store tuples, which can be looked up  
+by each of their elements.</p>
+ 
+  <p>When creating indices, an <i>index type</i> and a <i>key function</i> are
+  needed. The key function takes a value and generates a key from it to be
+  used in indexing the values.  There are two types of indices available -
+  <i>ordered_unique</i> and <i>ordered_non_unique</i>.  Both of these indices
+  store values in order based on the key. With an ordered_unique index, keys
+  derived from values cannot compare the same as any other key for that index,
+  this comparison is done with <code>==</code> operator.</p>
+ 
+  <p>To create a representation of a multi index that has only a single index,
+  you must create a <i>view</i> of the multi index with the function <a href="#view-2"><code>view/2</code></a>. This view lets you access a multi index by a key, similar to
+  accessing a dict with a key. All functions which take a view can also take a
+  regular multi index, which is assumed to be indexed by the first index.
+  Indexes are specified by the order in the list which they are given to
+  <a href="#new-1"><code>new/1</code></a>, the first index is numbered 1, the second index is numbered  
+2, and so on.  Typically indices will be given constant definitions so that  
+creating a view is done by a name, instead of the index number.</p>
+ 
+  <h3><a name="EXAMPLES">EXAMPLES</a></h3>
+  Example of an employee list using a multi index to look up employees by
+  various fields.
+  <code><pre>
+  -module(employee_list).
+ 
+  -define(BY_NAME, 1).
+  -define(BY_JOB, 2).
+ 
+  -export([new/0, hire/3, fire/2, department_list/2]).
+ 
+  new() -&gt;
+      multi_index:new([{ordered_unique, fun(X) -&gt; element(1, X) end},
+              {ordered_non_unique, fun(X) -&gt; element(2, X) end}]).
+ 
+  hire(Name, Job, Employees) -&gt;
+      case multi_index:try_insert({Name, Job}, Employees) of
+          {ok, NewEmployees} -&gt; {ok, NewEmployees};
+          error -&gt; {error, "This employee already works here"}
+      end.
+ 
+  fire(Name, Employees) -&gt;
+      case multi_index:fetch_all(Name, multi_index:view(?BY_NAME, Employees)) of
+          [Emp] -&gt; {ok, multi_index:erase(Name,
+                      multi_index:view(?BY_NAME, Employees))};
+          _ -&gt; {error, "This employee does not work here"}
+      end.
+ 
+  department_list(Job, Employees) -&gt;
+      multi_index:fetch_all(Job, multi_index:view(?BY_JOB, Employees)).
+  </pre></code>
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-key_function">key_function()</a></h3>
+<p><tt>key_function() = function((term()) -&gt; term())</tt></p>
+<p>A function which, when
+  given a value, returns a corresponding key used to index that value.</p>
+
+<h3 class="typedecl"><a name="type-multi_index">multi_index()</a></h3>
+<p><b>abstract datatype</b>: <tt>multi_index()</tt></p>
+<p>An opaque term representing a multi index.</p>
+
+<h3 class="typedecl"><a name="type-multi_index_option">multi_index_option()</a></h3>
+<p><tt>multi_index_option() = {ordered_unique, <a href="#type-key_function">key_function()</a>} | {ordered_non_unique, <a href="#type-key_function">key_function()</a>}</tt></p>
+<p><p><i>ordered_unique</i> - generates a unique index where values are ordered by  
+their keys, which are obtained by calling the key function on each value.</p>
+ 
+  <i>ordered_non_unique</i> - generates a non-unique index where values are
+  ordered by their keys, which are obtained by calling the key function on
+  each value.</p>
+
+<h3 class="typedecl"><a name="type-multi_index_view">multi_index_view()</a></h3>
+<p><b>abstract datatype</b>: <tt>multi_index_view()</tt></p>
+<p>An opaque term representing a view of a multi
+  index, which is used to look up values on a single index.</p>
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#erase-2">erase/2</a></td><td>Erases all elements, if any, from the multi index view
+  <code>View</code> whose key matches <code>Key</code> for the index in
+  <code>View</code>.</td></tr>
+<tr><td valign="top"><a href="#fetch-2">fetch/2</a></td><td>Fetches and returns a single element from the multi index view
+  <code>View</code> whose key matches <code>Key</code> for the index in
+  <code>View</code>.</td></tr>
+<tr><td valign="top"><a href="#fetch_all-2">fetch_all/2</a></td><td>Looks up and returns a possibly empty list of all values in the multi
+  index view <code>View</code> and whose key matches <code>Key</code> for the
+  index in <code>View</code>.</td></tr>
+<tr><td valign="top"><a href="#from_list-2">from_list/2</a></td><td>Returns a new multi index whose elements are the elements in
+  <code>Values</code>, and with options <code>Options</code>.</td></tr>
+<tr><td valign="top"><a href="#insert-2">insert/2</a></td><td>Inserts the element <code>Value</code> into the multi index
+  <code>MI1</code> and returns the resulting multi index <code>MI2</code>.</td></tr>
+<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Returns an empty multi index with options <code>Options</code>.</td></tr>
+<tr><td valign="top"><a href="#replace-3">replace/3</a></td><td>Replaces all instances of <code>Value1</code> with <code>Value2</code>
+  in the multi index <code>MI1</code> and returns the resulting multi index
+  <code>MI2</code>.</td></tr>
+<tr><td valign="top"><a href="#to_list-1">to_list/1</a></td><td>Returns a list of all values in the multi index view <code>View</code>,
+  in the order of their keys for the index in <code>View</code>.</td></tr>
+<tr><td valign="top"><a href="#try_insert-2">try_insert/2</a></td><td>Attempt to insert the element <code>Value</code> into the multi index
+  <code>MI1</code>.</td></tr>
+<tr><td valign="top"><a href="#view-2">view/2</a></td><td>Creates a multi index view of the multi index <code>MI</code> with the
+  index specified by <code>Num</code>.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="erase-2">erase/2</a></h3>
+<div class="spec">
+<p><tt>erase(Key, View) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
+<ul class="definitions"><li><tt>Key = term()</tt></li>
+<li><tt>View = <a href="#type-multi_index_view">multi_index_view()</a> | <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p><p>Erases all elements, if any, from the multi index view
+  <code>View</code> whose key matches <code>Key</code> for the index in
+  <code>View</code>. The resulting multi index is returned.</p>
+ 
+  If a multi index is given in <code>View</code> the first index is used.</p>
+
+<h3 class="function"><a name="fetch-2">fetch/2</a></h3>
+<div class="spec">
+<p><tt>fetch(Key, View) -&gt; Value</tt>
+<ul class="definitions"><li><tt>Key = term()</tt></li>
+<li><tt>Value = term()</tt></li>
+<li><tt>View = <a href="#type-multi_index_view">multi_index_view()</a> | <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p><p>Fetches and returns a single element from the multi index view
+  <code>View</code> whose key matches <code>Key</code> for the index in
+  <code>View</code>.  Assumes that a matching value is present, crashes
+  otherwise. If this can happen, use <a href="#fetch_all-2"><code>fetch_all/2</code></a> instead. If
+  <code>View</code> is a non-unique index and more than one matching value is  
+found, it is unspecified which is returned.</p>
+ 
+  If a multi index is given in <code>View</code> the first index is used.</p>
+
+<h3 class="function"><a name="fetch_all-2">fetch_all/2</a></h3>
+<div class="spec">
+<p><tt>fetch_all(Key, View) -&gt; [Value]</tt>
+<ul class="definitions"><li><tt>Key = term()</tt></li>
+<li><tt>Value = term()</tt></li>
+<li><tt>View = <a href="#type-multi_index_view">multi_index_view()</a> | <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p><p>Looks up and returns a possibly empty list of all values in the multi
+  index view <code>View</code> and whose key matches <code>Key</code> for the
+  index in <code>View</code>. If <code>View</code> is a non-unique index and  
+more than one matching value is found, it is unspecified what order the  
+values are returned in.</p>
+ 
+  If a multi index is given in <code>View</code> the first index is used.</p>
+
+<h3 class="function"><a name="from_list-2">from_list/2</a></h3>
+<div class="spec">
+<p><tt>from_list(Values, Options) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
+<ul class="definitions"><li><tt>Values = [term()]</tt></li>
+<li><tt>Options = [<a href="#type-multi_index_option">multi_index_option()</a>]</tt></li>
+</ul></p>
+</div><p>Returns a new multi index whose elements are the elements in
+  <code>Values</code>, and with options <code>Options</code>. Assumes that no
+  value in <code>Values</code> contains a key conflict with any other value in
+  <code>Values</code>, crashes if this happens.  If a different behavior is
+  needed, <code>lists:foldl</code> should be used to build up a new multi
+  index instead.</p>
+
+<h3 class="function"><a name="insert-2">insert/2</a></h3>
+<div class="spec">
+<p><tt>insert(Value, MI1) -&gt; MI2</tt>
+<ul class="definitions"><li><tt>Value = term()</tt></li>
+<li><tt>MI1 = <a href="#type-multi_index">multi_index()</a></tt></li>
+<li><tt>MI2 = <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p>Inserts the element <code>Value</code> into the multi index
+  <code>MI1</code> and returns the resulting multi index <code>MI2</code>.
+  Assumes that <code>Value</code> does not contain a key conflict with any
+  value in <code>MI1</code>, crashes otherwise. If this can happen, use <a href="#try_insert-2"><code>try_insert/2</code></a> instead.</p>
+
+<h3 class="function"><a name="new-1">new/1</a></h3>
+<div class="spec">
+<p><tt>new(Options) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
+<ul class="definitions"><li><tt>Options = [<a href="#type-multi_index_option">multi_index_option()</a>]</tt></li>
+</ul></p>
+</div><p><p>Returns an empty multi index with options <code>Options</code>.</p>
+ 
+  Options are used to control what indices the multi index is created with.
+  When passing indices, the first element in the list of indices is the first
+  index, the second element (if any) is the second index, and so on.</p>
+
+<h3 class="function"><a name="replace-3">replace/3</a></h3>
+<div class="spec">
+<p><tt>replace(Value1, Value2, MI1) -&gt; MI2</tt>
+<ul class="definitions"><li><tt>Value1 = term()</tt></li>
+<li><tt>Value2 = term()</tt></li>
+<li><tt>MI1 = <a href="#type-multi_index">multi_index()</a></tt></li>
+<li><tt>MI2 = <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p>Replaces all instances of <code>Value1</code> with <code>Value2</code>
+  in the multi index <code>MI1</code> and returns the resulting multi index
+  <code>MI2</code>. Assumes at least one <code>Value1</code> exists in
+  <code>MI1</code>, crashes otherwise.</p>
+
+<h3 class="function"><a name="to_list-1">to_list/1</a></h3>
+<div class="spec">
+<p><tt>to_list(View) -&gt; [Value]</tt>
+<ul class="definitions"><li><tt>View = <a href="#type-multi_index_view">multi_index_view()</a> | <a href="#type-multi_index">multi_index()</a></tt></li>
+<li><tt>Value = term()</tt></li>
+</ul></p>
+</div><p><p>Returns a list of all values in the multi index view <code>View</code>,
+  in the order of their keys for the index in <code>View</code>. If
+  <code>View</code> is a non-unique index and multiple values with the same  
+key are found, it is unspecified what order the values are placed in the  
+list relative to each other.</p>
+ 
+  If a multi index is given in <code>View</code> the first index is used.</p>
+
+<h3 class="function"><a name="try_insert-2">try_insert/2</a></h3>
+<div class="spec">
+<p><tt>try_insert(Value, MI1) -&gt; {ok, MI2} | error</tt>
+<ul class="definitions"><li><tt>Value = term()</tt></li>
+<li><tt>MI1 = <a href="#type-multi_index">multi_index()</a></tt></li>
+<li><tt>MI2 = <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p>Attempt to insert the element <code>Value</code> into the multi index
+  <code>MI1</code>. If the element can be inserted, multi index
+  <code>MI2</code> is created with that element inserted and <code>{ok,
+  MI2}</code> is returned. If the element cannot be inserted because it
+  violates a unique key constraint in <code>MI1</code>, then
+  <code>error</code> is returned.</p>
+
+<h3 class="function"><a name="view-2">view/2</a></h3>
+<div class="spec">
+<p><tt>view(Num, MI) -&gt; <a href="#type-multi_index_view">multi_index_view()</a></tt>
+<ul class="definitions"><li><tt>Num = integer()</tt></li>
+<li><tt>MI = <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p>Creates a multi index view of the multi index <code>MI</code> with the
+  index specified by <code>Num</code>. <code>Num</code> must be between
+  <code>1</code> and the number of indices given to <a href="#new-1"><code>new/1</code></a>, inclusive.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc, Sep 2 2010, 18:36:48.</i></p>
+</body>
+</html>
