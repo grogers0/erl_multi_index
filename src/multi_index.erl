@@ -24,8 +24,8 @@
 
 -module(multi_index).
 
--export([erase/2, fetch/2, from_list/2, insert/2, lookup/2, new/1, replace/3,
-        to_list/1, try_insert/2, view/2]).
+-export([erase/2, fetch/2, fetch_all/2, from_list/2, insert/2, new/1,
+        replace/3, to_list/1, try_insert/2, view/2]).
 
 -type key_fun() :: fun((term()) -> term()).
 
@@ -50,31 +50,31 @@
 -spec erase(term(), multi_index() | multi_index_view()) -> multi_index().
 erase(K, MIV) when is_record(MIV, multi_index_view) ->
     MI = MIV#multi_index_view.view_of,
-    case lookup(K, MIV#multi_index_view.index,
+    case fetch_all(K, MIV#multi_index_view.index,
             MIV#multi_index_view.key_val_store) of
-        {values, Vs} -> MI#multi_index{
+        [] -> MI
+        [V] -> MI#multi_index{
+                key_val_stores = erase_one(V, MI#multi_index.indices,
+                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
+        Vs -> MI#multi_index{
                 key_val_stores = erase_all(
                     lists:foldl(fun sets:add_element/2, sets:new(), Vs),
                     MI#multi_index.indices, MI#multi_index.key_funs,
                     MI#multi_index.key_val_stores)};
-        {value, V} -> MI#multi_index{
-                key_val_stores = erase_one(V, MI#multi_index.indices,
-                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
-        none -> MI
     end;
 erase(K, MI) when is_record(MI, multi_index) ->
     [Idx | _] = MI#multi_index.indices,
     [KVS | _] = MI#multi_index.key_val_stores,
-    case lookup(K, Idx, KVS) of
-        {values, Vs} -> MI#multi_index{
+    case fetch_all(K, Idx, KVS) of
+        [] -> MI
+        [V] -> MI#multi_index{
+                key_val_stores = erase_one(V, MI#multi_index.indices,
+                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
+        Vs -> MI#multi_index{
                 key_val_stores = erase_all(
                     lists:foldl(fun sets:add_element/2, sets:new(), Vs),
                     MI#multi_index.indices, MI#multi_index.key_funs,
                     MI#multi_index.key_val_stores)};
-        {value, V} -> MI#multi_index{
-                key_val_stores = erase_one(V, MI#multi_index.indices,
-                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
-        error -> MI
     end.
 
 erase_all(_, [], [], []) -> [];
@@ -122,6 +122,27 @@ fetch_one(K, ordered_non_unique, KVS) ->
     V.
 
 
+-spec fetch_all(term(), multi_index() | multi_index_view()) -> [term()].
+fetch_all(K, MIV) when is_record(MIV, multi_index_view) ->
+    fetch_all(K, MIV#multi_index_view.index,
+        MIV#multi_index_view.key_val_store);
+fetch_all(K, MI) when is_record(MI, multi_index) ->
+    [Idx | _] = MI#multi_index.indices,
+    [KVS | _] = MI#multi_index.key_val_stores,
+    fetch_all(K, Idx, KVS).
+
+fetch_all(K, ordered_unique, KVS) ->
+    case gb_trees:lookup(K, KVS) of
+        {value, V} -> [V];
+        none -> []
+    end;
+fetch_all(K, ordered_non_unique, KVS) ->
+    case gb_trees:lookup(K, KVS) of
+        {value, Vs} -> Vs;
+        none -> []
+    end.
+
+
 -spec from_list([term()], [multi_index_option()]) -> multi_index().
 from_list(Vs, Opts) ->
     lists:foldl(fun insert/2, new(Opts), Vs).
@@ -145,25 +166,6 @@ insert_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
                 insert_one(V, Idxs, KFs, KVSs)];
         none ->
             [gb_trees:insert(K, [V], KVS) | insert_one(V, Idxs, KFs, KVSs)]
-    end.
-
-
--spec lookup(term(), multi_index() | multi_index_view()) ->
-    {'value', term()} | {'values', [term()]} | 'none'.
-lookup(K, MIV) when is_record(MIV, multi_index_view) ->
-    lookup(K, MIV#multi_index_view.index,
-        MIV#multi_index_view.key_val_store);
-lookup(K, MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
-    lookup(K, Idx, KVS).
-
-lookup(K, ordered_unique, KVS) ->
-    gb_trees:lookup(K, KVS);
-lookup(K, ordered_non_unique, KVS) ->
-    case gb_trees:lookup(K, KVS) of
-        {value, Vs} -> {values, Vs};
-        none -> none
     end.
 
 
