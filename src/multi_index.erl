@@ -52,7 +52,7 @@ erase(K, MIV) when is_record(MIV, multi_index_view) ->
     MI = MIV#multi_index_view.view_of,
     case fetch_all(K, MIV#multi_index_view.index,
             MIV#multi_index_view.key_val_store) of
-        [] -> MI
+        [] -> MI;
         [V] -> MI#multi_index{
                 key_val_stores = erase_one(V, MI#multi_index.indices,
                     MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
@@ -60,13 +60,13 @@ erase(K, MIV) when is_record(MIV, multi_index_view) ->
                 key_val_stores = erase_all(
                     lists:foldl(fun sets:add_element/2, sets:new(), Vs),
                     MI#multi_index.indices, MI#multi_index.key_funs,
-                    MI#multi_index.key_val_stores)};
+                    MI#multi_index.key_val_stores)}
     end;
 erase(K, MI) when is_record(MI, multi_index) ->
     [Idx | _] = MI#multi_index.indices,
     [KVS | _] = MI#multi_index.key_val_stores,
     case fetch_all(K, Idx, KVS) of
-        [] -> MI
+        [] -> MI;
         [V] -> MI#multi_index{
                 key_val_stores = erase_one(V, MI#multi_index.indices,
                     MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
@@ -74,7 +74,7 @@ erase(K, MI) when is_record(MI, multi_index) ->
                 key_val_stores = erase_all(
                     lists:foldl(fun sets:add_element/2, sets:new(), Vs),
                     MI#multi_index.indices, MI#multi_index.key_funs,
-                    MI#multi_index.key_val_stores)};
+                    MI#multi_index.key_val_stores)}
     end.
 
 erase_all(_, [], [], []) -> [];
