@@ -66,6 +66,15 @@ unique index with function y is index 2.</p>
   </pre></code>
 <h2><a name="types">Data Types</a></h2>
 
+<h3 class="typedecl"><a name="type-index">index()</a></h3>
+<p><tt>index() = {ordered_unique, <a href="#type-key_function">key_function()</a>} | {ordered_non_unique, <a href="#type-key_function">key_function()</a>}</tt></p>
+<p><p><i>ordered_unique</i> - generates a unique index where values are ordered by  
+their keys, which are obtained by calling the key function on each value.</p>
+ 
+  <i>ordered_non_unique</i> - generates a non-unique index where values are
+  ordered by their keys, which are obtained by calling the key function on
+  each value.</p>
+
 <h3 class="typedecl"><a name="type-key_function">key_function()</a></h3>
 <p><tt>key_function() = function((term()) -&gt; term())</tt></p>
 <p>A function which, when
@@ -74,15 +83,6 @@ unique index with function y is index 2.</p>
 <h3 class="typedecl"><a name="type-multi_index">multi_index()</a></h3>
 <p><b>abstract datatype</b>: <tt>multi_index()</tt></p>
 <p>An opaque term representing a multi index.</p>
-
-<h3 class="typedecl"><a name="type-multi_index_option">multi_index_option()</a></h3>
-<p><tt>multi_index_option() = {ordered_unique, <a href="#type-key_function">key_function()</a>} | {ordered_non_unique, <a href="#type-key_function">key_function()</a>}</tt></p>
-<p><p><i>ordered_unique</i> - generates a unique index where values are ordered by  
-their keys, which are obtained by calling the key function on each value.</p>
- 
-  <i>ordered_non_unique</i> - generates a non-unique index where values are
-  ordered by their keys, which are obtained by calling the key function on
-  each value.</p>
 
 <h2><a name="index">Function Index</a></h2>
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#erase-3">erase/3</a></td><td>Erases all elements, if any, from the multi index <code>MI</code> whose
@@ -94,10 +94,11 @@ their keys, which are obtained by calling the key function on each value.</p>
   index <code>MI</code> and whose key for index number <code>IndexNum</code>
   matches <code>Key</code>.</td></tr>
 <tr><td valign="top"><a href="#from_list-2">from_list/2</a></td><td>Returns a new multi index whose elements are the elements in
-  <code>Values</code>, and with options <code>Options</code>.</td></tr>
+  <code>Values</code>, and with indicse <code>Indices</code>.</td></tr>
+<tr><td valign="top"><a href="#indices-1">indices/1</a></td><td>Returns the indices used in the multi index <code>MI</code>.</td></tr>
 <tr><td valign="top"><a href="#insert-2">insert/2</a></td><td>Inserts the element <code>Value</code> into the multi index
-  <code>MI1</code> and returns the resulting multi index <code>MI2</code>.</td></tr>
-<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Returns an empty multi index with options <code>Options</code>.</td></tr>
+  <code>MI</code> and returns the resulting multi index.</td></tr>
+<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Returns an empty multi index with indices <code>Indices</code>.</td></tr>
 <tr><td valign="top"><a href="#replace-3">replace/3</a></td><td>Replaces all instances of <code>Value1</code> with <code>Value2</code>
   in the multi index <code>MI</code> and returns the resulting multi index.</td></tr>
 <tr><td valign="top"><a href="#size-1">size/1</a></td><td>Returns the number of elements stored in the multi index
@@ -152,38 +153,43 @@ their keys, which are obtained by calling the key function on each value.</p>
 
 <h3 class="function"><a name="from_list-2">from_list/2</a></h3>
 <div class="spec">
-<p><tt>from_list(Values, Options) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
+<p><tt>from_list(Values, Indices) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
 <ul class="definitions"><li><tt>Values = [term()]</tt></li>
-<li><tt>Options = [<a href="#type-multi_index_option">multi_index_option()</a>]</tt></li>
+<li><tt>Indices = [<a href="#type-index">index()</a>]</tt></li>
 </ul></p>
 </div><p>Returns a new multi index whose elements are the elements in
-  <code>Values</code>, and with options <code>Options</code>. Assumes that no
+  <code>Values</code>, and with indicse <code>Indices</code>. Assumes that no
   value in <code>Values</code> contains a key conflict with any other value in
   <code>Values</code>, crashes if this happens.  If a different behavior is
   needed, <code>lists:foldl</code> should be used to build up a new multi
   index instead.</p>
 <p><b>See also:</b> <a href="#new-1">new/1</a>.</p>
 
+<h3 class="function"><a name="indices-1">indices/1</a></h3>
+<div class="spec">
+<p><tt>indices(MI) -&gt; [<a href="#type-index">index()</a>]</tt>
+<ul class="definitions"><li><tt>MI = <a href="#type-multi_index">multi_index()</a></tt></li>
+</ul></p>
+</div><p>Returns the indices used in the multi index <code>MI</code>.</p>
+
 <h3 class="function"><a name="insert-2">insert/2</a></h3>
 <div class="spec">
-<p><tt>insert(Value, MI1) -&gt; MI2</tt>
+<p><tt>insert(Value, MI) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
 <ul class="definitions"><li><tt>Value = term()</tt></li>
-<li><tt>MI1 = <a href="#type-multi_index">multi_index()</a></tt></li>
-<li><tt>MI2 = <a href="#type-multi_index">multi_index()</a></tt></li>
+<li><tt>MI = <a href="#type-multi_index">multi_index()</a></tt></li>
 </ul></p>
 </div><p>Inserts the element <code>Value</code> into the multi index
-  <code>MI1</code> and returns the resulting multi index <code>MI2</code>.
-  Assumes that <code>Value</code> does not contain a key conflict with any
-  value in <code>MI1</code>, crashes otherwise. If this can happen, use <a href="#try_insert-2"><code>try_insert/2</code></a> instead.</p>
+  <code>MI</code> and returns the resulting multi index.  Assumes that
+  <code>Value</code> does not contain a key conflict with any value in
+  <code>MI</code>, crashes otherwise. If this can happen, use <a href="#try_insert-2"><code>try_insert/2</code></a> instead.</p>
 
 <h3 class="function"><a name="new-1">new/1</a></h3>
 <div class="spec">
-<p><tt>new(Options) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
-<ul class="definitions"><li><tt>Options = [<a href="#type-multi_index_option">multi_index_option()</a>]</tt></li>
+<p><tt>new(Indices) -&gt; <a href="#type-multi_index">multi_index()</a></tt>
+<ul class="definitions"><li><tt>Indices = [<a href="#type-index">index()</a>]</tt></li>
 </ul></p>
-</div><p><p>Returns an empty multi index with options <code>Options</code>.</p>
+</div><p><p>Returns an empty multi index with indices <code>Indices</code>.</p>
  
-  Options are used to control what indices the multi index is created with.
   When passing indices, the first element in the list of indices is the first
   index, the second element (if any) is the second index, and so on. There
   must be at least one index given.</p>
@@ -237,6 +243,6 @@ their keys, which are obtained by calling the key function on each value.</p>
 <hr>
 
 <div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc, Sep 3 2010, 12:05:45.</i></p>
+<p><i>Generated by EDoc, Sep 3 2010, 14:14:44.</i></p>
 </body>
 </html>
