@@ -40,11 +40,10 @@ hire(Name, Job, Employees) ->
     end.
 
 fire(Name, Employees) ->
-    case multi_index:fetch_all(Name, multi_index:view(?BY_NAME, Employees)) of
-        [Emp] -> {ok, multi_index:erase(Name,
-                    multi_index:view(?BY_NAME, Employees))};
+    case multi_index:fetch_all(Name, ?BY_NAME, Employees) of
+        [_Emp] -> {ok, multi_index:erase(Name, ?BY_NAME, Employees)};
         _ -> {error, "This employee does not work here"}
     end.
 
 department_list(Job, Employees) ->
-    multi_index:fetch_all(Job, multi_index:view(?BY_JOB, Employees)).
+    multi_index:fetch_all(Job, ?BY_JOB, Employees).
