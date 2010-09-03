@@ -37,17 +37,12 @@
 %% <i>ordered_unique</i> and <i>ordered_non_unique</i>.  Both of these indices
 %% store values in order based on the key. With an ordered_unique index, keys
 %% derived from values cannot compare the same as any other key for that index,
-%% this comparison is done with <code>==</code> operator.
-%% 
-%% To create a representation of a multi index that has only a single index,
-%% you must create a <i>view</i> of the multi index with the function {@link
-%% view/2}. This view lets you access a multi index by a key, similar to
-%% accessing a dict with a key. All functions which take a view can also take a
-%% regular multi index, which is assumed to be indexed by the first index.
-%% Indexes are specified by the order in the list which they are given to
-%% {@link new/1}, the first index is numbered 1, the second index is numbered
-%% 2, and so on.  Typically indices will be given constant definitions so that
-%% creating a view is done by a name, instead of the index number.
+%% this comparison is done with <code>==</code> operator. When calling
+%% functions that take an <i>IndexNum</i>, the index num is the position in the
+%% list of indices given to {@link new/1}, for example in the multi index
+%% <code>MI = multi_index:new([{ordered_non_unique, fun x/1}, {ordered_unique,
+%% fun y/1}])</code> the non-unique index with function x is index 1, and the
+%% unique index with function y is index 2.
 %%
 %% == EXAMPLES ==
 %% Example of an employee list using a multi index to look up employees by
@@ -71,26 +66,22 @@
 %%     end.
 %% 
 %% fire(Name, Employees) ->
-%%     case multi_index:fetch_all(Name, multi_index:view(?BY_NAME, Employees)) of
-%%         [Emp] -> {ok, multi_index:erase(Name,
-%%                     multi_index:view(?BY_NAME, Employees))};
+%%     case multi_index:fetch_all(Name, ?BY_NAME, Employees) of
+%%         [_Emp] -> {ok, multi_index:erase(Name, ?BY_NAME, Employees)};
 %%         _ -> {error, "This employee does not work here"}
 %%     end.
 %% 
 %% department_list(Job, Employees) ->
-%%     multi_index:fetch_all(Job, multi_index:view(?BY_JOB, Employees)).
+%%     multi_index:fetch_all(Job, ?BY_JOB, Employees).
 %% </pre></code>
 
 
 -module(multi_index).
 
--export([erase/2, fetch/2, fetch_all/2, from_list/2, insert/2, new/1,
-        replace/3, size/1, to_list/1, try_insert/2, view/2]).
+-export([erase/3, fetch/3, fetch_all/3, from_list/2, insert/2, new/1,
+        replace/3, size/1, to_list/2, try_insert/2]).
 
 %% @type multi_index(). An opaque term representing a multi index.
-
-%% @type multi_index_view(). An opaque term representing a view of a multi
-%% index, which is used to look up values on a single index.
 
 %% @type key_function() = function((term()) -> term()). A function which, when
 %% given a value, returns a corresponding key used to index that value.
@@ -111,44 +102,23 @@
         key_funs = [] :: [key_function()],
         key_val_stores = [] :: [gb_tree()]}).
 
--record(multi_index_view, {
-        index :: ordered_unique | ordered_non_unique,
-        key_fun :: key_function(),
-        key_val_store :: gb_tree(),
-        view_of :: multi_index()}).
-
 -type multi_index() :: #multi_index{}.
--type multi_index_view() :: #multi_index_view{}.
 -type multi_index_option() :: {ordered_unique, key_function()} |
     {ordered_non_unique, key_function()}.
 
 
-%% @spec erase(Key::Key, View::View) -> multi_index()
+%% @spec erase(Key::Key, IndexNum::IndexNum, MI::MI) -> multi_index()
 %%  Key = term()
-%%  View = multi_index_view() | multi_index()
-%% @doc Erases all elements, if any, from the multi index view
-%% <code>View</code> whose key matches <code>Key</code> for the index in
-%% <code>View</code>. The resulting multi index is returned.
-%% 
-%% If a multi index is given in <code>View</code> the first index is used.
--spec erase(term(), multi_index() | multi_index_view()) -> multi_index().
-erase(K, MIV) when is_record(MIV, multi_index_view) ->
-    MI = MIV#multi_index_view.view_of,
-    case fetch_all(K, MIV#multi_index_view.index,
-            MIV#multi_index_view.key_val_store) of
-        [] -> MI;
-        [V] -> MI#multi_index{
-                key_val_stores = erase_one(V, MI#multi_index.indices,
-                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
-        Vs -> MI#multi_index{
-                key_val_stores = erase_all(
-                    lists:foldl(fun sets:add_element/2, sets:new(), Vs),
-                    MI#multi_index.indices, MI#multi_index.key_funs,
-                    MI#multi_index.key_val_stores)}
-    end;
-erase(K, MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
+%%  IndexNum = integer()
+%%  MI = multi_index()
+%% @doc Erases all elements, if any, from the multi index <code>MI</code> whose
+%% key for index number <code>IndexNum</code> matches <code>Key</code>. The
+%% resulting multi index is returned.
+-spec erase(term(), integer(), multi_index()) -> multi_index().
+erase(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
+        N =< length(MI#multi_index.indices) ->
+    Idx = lists:nth(N, MI#multi_index.indices),
+    KVS = lists:nth(N, MI#multi_index.key_val_stores),
     case fetch_all(K, Idx, KVS) of
         [] -> MI;
         [V] -> MI#multi_index{
@@ -190,25 +160,22 @@ erase_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
     [KVSNew | erase_one(V, Idxs, KFs, KVSs)].
 
 
-%% @spec fetch(Key::Key, View::View) -> Value
+%% @spec fetch(Key::Key, IndexNum::IndexNum, MI::MI) -> Value
 %%  Key = term()
+%%  IndexNum = integer()
+%%  MI = multi_index()
 %%  Value = term()
-%%  View = multi_index_view() | multi_index()
-%% @doc Fetches and returns a single element from the multi index view
-%% <code>View</code> whose key matches <code>Key</code> for the index in
-%% <code>View</code>.  Assumes that a matching value is present, crashes
+%% @doc Fetches and returns a single element from the multi index
+%% <code>MI</code> whose key for index number <code>IndexNum</code> matches
+%% <code>Key</code>.  Assumes that a matching value is present, crashes
 %% otherwise. If this can happen, use {@link fetch_all/2} instead. If
-%% <code>View</code> is a non-unique index and more than one matching value is
-%% found, it is unspecified which is returned.
-%%
-%% If a multi index is given in <code>View</code> the first index is used.
--spec fetch(term(), multi_index() | multi_index_view()) -> term().
-fetch(K, MIV) when is_record(MIV, multi_index_view) ->
-    fetch_one(K, MIV#multi_index_view.index,
-        MIV#multi_index_view.key_val_store);
-fetch(K, MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
+%% <code>IndexNum</code> is a non-unique index and more than one matching value
+%% is found, it is unspecified which one is returned.
+-spec fetch(term(), integer(), multi_index()) -> term().
+fetch(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
+        N =< length(MI#multi_index.indices) ->
+    Idx = lists:nth(N, MI#multi_index.indices),
+    KVS = lists:nth(N, MI#multi_index.key_val_stores),
     fetch_one(K, Idx, KVS).
 
 fetch_one(K, ordered_unique, KVS) ->
@@ -218,32 +185,29 @@ fetch_one(K, ordered_non_unique, KVS) ->
     V.
 
 
-%% @spec fetch_all(Key::Key, View::View) -> [Value]
+%% @spec fetch_all(Key::Key, IndexNum::IndexNum, MI::MI) -> [Value]
 %%  Key = term()
+%%  IndexNum = integer()
+%%  MI = multi_index()
 %%  Value = term()
-%%  View = multi_index_view() | multi_index()
 %% @doc Looks up and returns a possibly empty list of all values in the multi
-%% index view <code>View</code> and whose key matches <code>Key</code> for the
-%% index in <code>View</code>. If <code>View</code> is a non-unique index and
-%% more than one matching value is found, it is unspecified what order the
+%% index <code>MI</code> and whose key for index number <code>IndexNum</code>
+%% matches <code>Key</code>. If <code>IndexNum</code> is a non-unique index and
+%% more than one matching value is found, it is unspecified which order the
 %% values are returned in.
-%%
-%% If a multi index is given in <code>View</code> the first index is used.
--spec fetch_all(term(), multi_index() | multi_index_view()) -> [term()].
-fetch_all(K, MIV) when is_record(MIV, multi_index_view) ->
-    fetch_all(K, MIV#multi_index_view.index,
-        MIV#multi_index_view.key_val_store);
-fetch_all(K, MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
-    fetch_all(K, Idx, KVS).
+-spec fetch_all(term(), integer(), multi_index()) -> [term()].
+fetch_all(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
+        N =< length(MI#multi_index.indices) ->
+    Idx = lists:nth(N, MI#multi_index.indices),
+    KVS = lists:nth(N, MI#multi_index.key_val_stores),
+    fetch_all_1(K, Idx, KVS).
 
-fetch_all(K, ordered_unique, KVS) ->
+fetch_all_1(K, ordered_unique, KVS) ->
     case gb_trees:lookup(K, KVS) of
         {value, V} -> [V];
         none -> []
     end;
-fetch_all(K, ordered_non_unique, KVS) ->
+fetch_all_1(K, ordered_non_unique, KVS) ->
     case gb_trees:lookup(K, KVS) of
         {value, Vs} -> Vs;
         none -> []
@@ -323,15 +287,14 @@ add_option({ordered_non_unique, KeyFun}, MI) ->
         key_val_stores = [gb_trees:empty() | MI#multi_index.key_val_stores]}.
 
 
-%% @spec replace(Value1::Value1, Value2::Value2, MI1::MI1) -> MI2
+%% @spec replace(Value1::Value1, Value2::Value2, MI::MI) -> multi_index()
 %%  Value1 = term()
 %%  Value2 = term()
-%%  MI1 = multi_index()
-%%  MI2 = multi_index()
+%%  MI = multi_index()
 %% @doc Replaces all instances of <code>Value1</code> with <code>Value2</code>
-%% in the multi index <code>MI1</code> and returns the resulting multi index
-%% <code>MI2</code>. Assumes at least one <code>Value1</code> exists in
-%% <code>MI1</code>, crashes otherwise.
+%% in the multi index <code>MI</code> and returns the resulting multi index.
+%% Assumes at least one <code>Value1</code> exists in <code>MI</code>, crashes
+%% otherwise.
 -spec replace(term(), term(), multi_index()) -> multi_index().
 replace(V1, V2, MI) when is_record(MI, multi_index) ->
     MI#multi_index{key_val_stores = replace(V1, V2, MI#multi_index.indices,
@@ -379,27 +342,25 @@ size(ordered_non_unique, KVS) ->
     lists:foldl(fun(L, A) -> A + length(L) end, 0, gb_trees:values(KVS)).
 
 
-%% @spec to_list(View::View) -> [Value]
-%%  View = multi_index_view() | multi_index()
+%% @spec to_list(IndexNum::IndexNum, MI::MI) -> [Value]
+%%  IndexNum = integer()
+%%  MI = multi_index()
 %%  Value = term()
-%% @doc Returns a list of all values in the multi index view <code>View</code>,
-%% in the order of their keys for the index in <code>View</code>. If
-%% <code>View</code> is a non-unique index and multiple values with the same
-%% key are found, it is unspecified what order the values are placed in the
-%% list relative to each other.
-%%
-%% If a multi index is given in <code>View</code> the first index is used.
--spec to_list(multi_index() | multi_index_view()) -> [term()].
-to_list(MIV) when is_record(MIV, multi_index_view) ->
-    to_list(MIV#multi_index_view.index, MIV#multi_index_view.key_val_store);
-to_list(MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
-    to_list(Idx, KVS).
+%% @doc Returns a list of all values in the multi index <code>MI</code>, in the
+%% order of their keys for index number <code>IndexNum</code>. If
+%% <code>IndexNum</code> is a non-unique index and multiple values with the
+%% same key are found, it is unspecified which order the equal keyed values are
+%% placed in the list relative to each other.
+-spec to_list(integer(), multi_index()) -> [term()].
+to_list(N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
+        N =< length(MI#multi_index.indices) ->
+    Idx = lists:nth(N, MI#multi_index.indices),
+    KVS = lists:nth(N, MI#multi_index.key_val_stores),
+    to_list_1(Idx, KVS).
 
-to_list(ordered_unique, KVS) ->
+to_list_1(ordered_unique, KVS) ->
     gb_trees:values(KVS);
-to_list(ordered_non_unique, KVS) ->
+to_list_1(ordered_non_unique, KVS) ->
     lists:flatmap(fun(X) -> X end, gb_trees:values(KVS)).
 
 
@@ -444,19 +405,3 @@ try_insert_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
             end;
         error -> error
     end.
-
-
-%% @spec view(Num::Num, MI::MI) -> multi_index_view()
-%%  Num = integer()
-%%  MI = multi_index()
-%% @doc Creates a multi index view of the multi index <code>MI</code> with the
-%% index specified by <code>Num</code>. <code>Num</code> must be between
-%% <code>1</code> and the number of indices given to {@link new/1}, inclusive.
--spec view(integer(), multi_index()) -> multi_index_view().
-view(Num, MI) when is_record(MI, multi_index), is_integer(Num), Num > 0,
-        Num =< length(MI#multi_index.indices) ->
-    #multi_index_view{
-        index = lists:nth(Num, MI#multi_index.indices),
-        key_fun = lists:nth(Num, MI#multi_index.key_funs),
-        key_val_store = lists:nth(Num, MI#multi_index.key_val_stores),
-        view_of = MI}.
