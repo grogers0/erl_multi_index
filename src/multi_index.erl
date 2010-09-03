@@ -85,7 +85,7 @@
 -module(multi_index).
 
 -export([erase/2, fetch/2, fetch_all/2, from_list/2, insert/2, new/1,
-        replace/3, to_list/1, try_insert/2, view/2]).
+        replace/3, size/1, to_list/1, try_insert/2, view/2]).
 
 %% @type multi_index(). An opaque term representing a multi index.
 
@@ -259,8 +259,9 @@ fetch_all(K, ordered_non_unique, KVS) ->
 %% <code>Values</code>, crashes if this happens.  If a different behavior is
 %% needed, <code>lists:foldl</code> should be used to build up a new multi
 %% index instead.
+%% @see new/1
 -spec from_list([term()], [multi_index_option()]) -> multi_index().
-from_list(Vs, Opts) ->
+from_list(Vs, Opts) when length(Opts) > 0 ->
     lists:foldl(fun insert/2, new(Opts), Vs).
 
 
@@ -300,9 +301,10 @@ insert_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
 %%
 %% Options are used to control what indices the multi index is created with.
 %% When passing indices, the first element in the list of indices is the first
-%% index, the second element (if any) is the second index, and so on.
+%% index, the second element (if any) is the second index, and so on. There
+%% must be at least one index given.
 -spec new([multi_index_option()]) -> multi_index().
-new(Opts) ->
+new(Opts) when length(Opts) > 0 ->
     MI = lists:foldl(fun add_option/2, #multi_index{}, Opts),
     #multi_index{
         indices = lists:reverse(MI#multi_index.indices),
@@ -359,6 +361,22 @@ replace(V1, V2, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
             end;
         none -> erlang:error(badarg)
     end.
+
+
+%% @spec size(MI::MI) -> integer()
+%%  MI = multi_index()
+%% @doc Returns the number of elements stored in the multi index
+%% <code>MI</code>.
+-spec size(multi_index()) -> integer().
+size(MI) when is_record(MI, multi_index) ->
+    [Idx | _] = MI#multi_index.indices,
+    [KVS | _] = MI#multi_index.key_val_stores,
+    size(Idx, KVS).
+
+size(ordered_unique, KVS) ->
+    gb_trees:size(KVS);
+size(ordered_non_unique, KVS) ->
+    lists:foldl(fun(L, A) -> A + length(L) end, 0, gb_trees:values(KVS)).
 
 
 %% @spec to_list(View::View) -> [Value]
