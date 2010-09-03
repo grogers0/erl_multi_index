@@ -78,15 +78,15 @@
 
 -module(multi_index).
 
--export([erase/3, fetch/3, fetch_all/3, from_list/2, insert/2, new/1,
-        replace/3, size/1, to_list/2, try_insert/2]).
+-export([erase/3, fetch/3, fetch_all/3, from_list/2, indices/1, insert/2,
+        new/1, replace/3, size/1, to_list/2, try_insert/2]).
 
 %% @type multi_index(). An opaque term representing a multi index.
 
 %% @type key_function() = function((term()) -> term()). A function which, when
 %% given a value, returns a corresponding key used to index that value.
 
-%% @type multi_index_option() = {ordered_unique, key_function()} |
+%% @type index() = {ordered_unique, key_function()} |
 %% {ordered_non_unique, key_function()}.
 %% <i>ordered_unique</i> - generates a unique index where values are ordered by
 %% their keys, which are obtained by calling the key function on each value.
@@ -96,15 +96,14 @@
 %% each value.
 
 -type key_function() :: fun((term()) -> term()).
+-type index() :: {ordered_unique, key_function()} |
+    {ordered_non_unique, key_function()}.
 
 -record(multi_index, {
-        indices = [] :: [ordered_unique | ordered_non_unique],
-        key_funs = [] :: [key_function()],
+        indices = [] :: [index()],
         key_val_stores = [] :: [gb_tree()]}).
 
 -type multi_index() :: #multi_index{}.
--type multi_index_option() :: {ordered_unique, key_function()} |
-    {ordered_non_unique, key_function()}.
 
 
 %% @spec erase(Key::Key, IndexNum::IndexNum, MI::MI) -> multi_index()
@@ -119,45 +118,44 @@ erase(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
         N =< length(MI#multi_index.indices) ->
     Idx = lists:nth(N, MI#multi_index.indices),
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
-    case fetch_all(K, Idx, KVS) of
+    case fetch_all_1(K, Idx, KVS) of
         [] -> MI;
         [V] -> MI#multi_index{
                 key_val_stores = erase_one(V, MI#multi_index.indices,
-                    MI#multi_index.key_funs, MI#multi_index.key_val_stores)};
+                    MI#multi_index.key_val_stores)};
         Vs -> MI#multi_index{
                 key_val_stores = erase_all(
                     lists:foldl(fun sets:add_element/2, sets:new(), Vs),
-                    MI#multi_index.indices, MI#multi_index.key_funs,
-                    MI#multi_index.key_val_stores)}
+                    MI#multi_index.indices, MI#multi_index.key_val_stores)}
     end.
 
-erase_all(_, [], [], []) -> [];
-erase_all(VSet, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+erase_all(_, [], []) -> [];
+erase_all(VSet, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
     [sets:fold(fun(V, KVS2) -> gb_trees:delete(KF(V), KVS2) end, KVS, VSet) |
-        erase_all(VSet, Idxs, KFs, KVSs)];
-erase_all(VSet, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+        erase_all(VSet, Idxs, KVSs)];
+erase_all(VSet, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
     KSet = sets:fold(fun(V, KSet2) -> sets:add_element(KF(V), KSet2) end,
         sets:new(), VSet),
     KVSNew = sets:fold(fun(K, KVS2) ->
                 Vs = gb_trees:get(K, KVS2),
-                case lists:filter(fun(V) ->
-                                not sets:is_element(V, VSet) end, Vs) of
+                case lists:filter(
+                        fun(V) -> not sets:is_element(V, VSet) end, Vs) of
                     [] -> KVS2;
                     VsNew -> gb_trees:update(K, VsNew, KVS2)
                 end
         end, KVS, KSet),
-    [KVSNew | erase_all(VSet, Idxs, KFs, KVSs)].
+    [KVSNew | erase_all(VSet, Idxs, KVSs)].
 
-erase_one(_, [], [], []) -> [];
-erase_one(V, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
-    [gb_trees:delete(KF(V), KVS) | erase_one(V, Idxs, KFs, KVSs)];
-erase_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+erase_one(_, [], []) -> [];
+erase_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
+    [gb_trees:delete(KF(V), KVS) | erase_one(V, Idxs, KVSs)];
+erase_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
     K = KF(V),
     KVSNew = case lists:filter(fun(X) -> X =/= V end, gb_trees:get(K, KVS)) of
         [] -> gb_trees:delete(K, KVS);
         Vs -> gb_trees:update(K, Vs, KVS)
     end,
-    [KVSNew | erase_one(V, Idxs, KFs, KVSs)].
+    [KVSNew | erase_one(V, Idxs, KVSs)].
 
 
 %% @spec fetch(Key::Key, IndexNum::IndexNum, MI::MI) -> Value
@@ -178,9 +176,9 @@ fetch(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
     fetch_one(K, Idx, KVS).
 
-fetch_one(K, ordered_unique, KVS) ->
+fetch_one(K, {ordered_unique, _KF}, KVS) ->
     gb_trees:get(K, KVS);
-fetch_one(K, ordered_non_unique, KVS) ->
+fetch_one(K, {ordered_non_unique, _KF}, KVS) ->
     [V | _] = gb_trees:get(K, KVS),
     V.
 
@@ -202,88 +200,91 @@ fetch_all(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
     fetch_all_1(K, Idx, KVS).
 
-fetch_all_1(K, ordered_unique, KVS) ->
+fetch_all_1(K, {ordered_unique, _KF}, KVS) ->
     case gb_trees:lookup(K, KVS) of
         {value, V} -> [V];
         none -> []
     end;
-fetch_all_1(K, ordered_non_unique, KVS) ->
+fetch_all_1(K, {ordered_non_unique, _KF}, KVS) ->
     case gb_trees:lookup(K, KVS) of
         {value, Vs} -> Vs;
         none -> []
     end.
 
 
-%% @spec from_list(Values::Values, Options::Options) -> multi_index()
+%% @spec from_list(Values::Values, Indices::Indices) -> multi_index()
 %%  Values = [term()]
-%%  Options = [multi_index_option()]
+%%  Indices = [index()]
 %% @doc Returns a new multi index whose elements are the elements in
-%% <code>Values</code>, and with options <code>Options</code>. Assumes that no
+%% <code>Values</code>, and with indicse <code>Indices</code>. Assumes that no
 %% value in <code>Values</code> contains a key conflict with any other value in
 %% <code>Values</code>, crashes if this happens.  If a different behavior is
 %% needed, <code>lists:foldl</code> should be used to build up a new multi
 %% index instead.
 %% @see new/1
--spec from_list([term()], [multi_index_option()]) -> multi_index().
-from_list(Vs, Opts) when length(Opts) > 0 ->
-    lists:foldl(fun insert/2, new(Opts), Vs).
+-spec from_list([term()], [index()]) -> multi_index().
+from_list(Vs, Indices) when length(Indices) > 0 ->
+    lists:foldl(fun insert/2, new(Indices), Vs).
 
 
-%% @spec insert(Value::Value, MI1::MI1) -> MI2
+%% @spec insert(Value::Value, MI::MI) -> multi_index()
 %%  Value = term()
-%%  MI1 = multi_index()
-%%  MI2 = multi_index()
+%%  MI = multi_index()
 %% @doc Inserts the element <code>Value</code> into the multi index
-%% <code>MI1</code> and returns the resulting multi index <code>MI2</code>.
-%% Assumes that <code>Value</code> does not contain a key conflict with any
-%% value in <code>MI1</code>, crashes otherwise. If this can happen, use {@link
+%% <code>MI</code> and returns the resulting multi index.  Assumes that
+%% <code>Value</code> does not contain a key conflict with any value in
+%% <code>MI</code>, crashes otherwise. If this can happen, use {@link
 %% try_insert/2} instead.
 -spec insert(term(), multi_index()) -> multi_index().
 insert(Val, MI) ->
     MI#multi_index{
         key_val_stores = insert_one(Val, MI#multi_index.indices,
-            MI#multi_index.key_funs, MI#multi_index.key_val_stores)}.
+            MI#multi_index.key_val_stores)}.
 
-insert_one(_V, [], [], []) -> [];
-insert_one(V, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+insert_one(_V, [], []) -> [];
+insert_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
     [gb_trees:insert(KF(V), V, KVS) |
-        insert_one(V, Idxs, KFs, KVSs)];
-insert_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+        insert_one(V, Idxs, KVSs)];
+insert_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
     K = KF(V),
     case gb_trees:lookup(K, KVS) of
         {value, Vals} ->
             [gb_trees:update(K, [V | Vals], KVS) |
-                insert_one(V, Idxs, KFs, KVSs)];
+                insert_one(V, Idxs, KVSs)];
         none ->
-            [gb_trees:insert(K, [V], KVS) | insert_one(V, Idxs, KFs, KVSs)]
+            [gb_trees:insert(K, [V], KVS) | insert_one(V, Idxs, KVSs)]
     end.
 
 
-%% @spec new(Options::Options) -> multi_index()
-%%  Options = [multi_index_option()]
-%% @doc Returns an empty multi index with options <code>Options</code>.
+%% @spec indices(MI::MI) -> [index()]
+%%  MI = multi_index()
+%% @doc Returns the indices used in the multi index <code>MI</code>.
+-spec indices(multi_index()) -> [index()].
+indices(MI) when is_record(MI, multi_index) ->
+    MI#multi_index.indices.
+
+
+%% @spec new(Indices::Indices) -> multi_index()
+%%  Indices = [index()]
+%% @doc Returns an empty multi index with indices <code>Indices</code>.
 %%
-%% Options are used to control what indices the multi index is created with.
 %% When passing indices, the first element in the list of indices is the first
 %% index, the second element (if any) is the second index, and so on. There
 %% must be at least one index given.
--spec new([multi_index_option()]) -> multi_index().
-new(Opts) when length(Opts) > 0 ->
-    MI = lists:foldl(fun add_option/2, #multi_index{}, Opts),
+-spec new([index()]) -> multi_index().
+new(Indices) when length(Indices) > 0 ->
+    MI = lists:foldl(fun add_index/2, #multi_index{}, Indices),
     #multi_index{
         indices = lists:reverse(MI#multi_index.indices),
-        key_funs = lists:reverse(MI#multi_index.key_funs),
         key_val_stores = lists:reverse(MI#multi_index.key_val_stores)}.
 
-add_option({ordered_unique, KeyFun}, MI) ->
+add_index({ordered_unique, KeyFun}, MI) when is_function(KeyFun) ->
     #multi_index{
-        indices = [ordered_unique | MI#multi_index.indices],
-        key_funs = [KeyFun | MI#multi_index.key_funs],
+        indices = [{ordered_unique, KeyFun} | MI#multi_index.indices],
         key_val_stores = [gb_trees:empty() | MI#multi_index.key_val_stores]};
-add_option({ordered_non_unique, KeyFun}, MI) ->
+add_index({ordered_non_unique, KeyFun}, MI) when is_function(KeyFun) ->
     #multi_index{
-        indices = [ordered_non_unique | MI#multi_index.indices],
-        key_funs = [KeyFun | MI#multi_index.key_funs],
+        indices = [{ordered_non_unique, KeyFun} | MI#multi_index.indices],
         key_val_stores = [gb_trees:empty() | MI#multi_index.key_val_stores]}.
 
 
@@ -298,17 +299,17 @@ add_option({ordered_non_unique, KeyFun}, MI) ->
 -spec replace(term(), term(), multi_index()) -> multi_index().
 replace(V1, V2, MI) when is_record(MI, multi_index) ->
     MI#multi_index{key_val_stores = replace(V1, V2, MI#multi_index.indices,
-            MI#multi_index.key_funs, MI#multi_index.key_val_stores)}.
+            MI#multi_index.key_val_stores)}.
 
-replace(_V1, _V2, [], [], []) -> {ok, []};
-replace(V1, V2, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+replace(_V1, _V2, [], []) -> {ok, []};
+replace(V1, V2, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
     K = KF(V1),
     case gb_trees:lookup(K, KVS) of
         {value, V1} ->
-            [gb_trees:update(K, V2, KVS) | replace(V1, V2, Idxs, KFs, KVSs)];
+            [gb_trees:update(K, V2, KVS) | replace(V1, V2, Idxs, KVSs)];
         _ -> erlang:error(badarg)
     end;
-replace(V1, V2, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
+replace(V1, V2, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
     K = KF(V1),
     case gb_trees:lookup(K, KVS) of
         {value, Vs} ->
@@ -319,7 +320,7 @@ replace(V1, V2, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
                             end end, error, Vs) of
                 {VsNew, ok} ->
                     [gb_trees:update(K, VsNew, KVS) |
-                        replace(V1, V2, Idxs, KFs, KVSs)];
+                        replace(V1, V2, Idxs, KVSs)];
                 {_, error} -> erlang:error(badarg)
             end;
         none -> erlang:error(badarg)
@@ -336,9 +337,9 @@ size(MI) when is_record(MI, multi_index) ->
     [KVS | _] = MI#multi_index.key_val_stores,
     size(Idx, KVS).
 
-size(ordered_unique, KVS) ->
+size({ordered_unique, _KF}, KVS) ->
     gb_trees:size(KVS);
-size(ordered_non_unique, KVS) ->
+size({ordered_non_unique, _KF}, KVS) ->
     lists:foldl(fun(L, A) -> A + length(L) end, 0, gb_trees:values(KVS)).
 
 
@@ -358,9 +359,9 @@ to_list(N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
     to_list_1(Idx, KVS).
 
-to_list_1(ordered_unique, KVS) ->
+to_list_1({ordered_unique, _KF}, KVS) ->
     gb_trees:values(KVS);
-to_list_1(ordered_non_unique, KVS) ->
+to_list_1({ordered_non_unique, _KF}, KVS) ->
     lists:flatmap(fun(X) -> X end, gb_trees:values(KVS)).
 
 
@@ -376,15 +377,15 @@ to_list_1(ordered_non_unique, KVS) ->
 %% <code>error</code> is returned.
 -spec try_insert(term(), multi_index()) -> {'ok', multi_index()} | 'error'.
 try_insert(Val, MI) ->
-    case try_insert_one(Val, MI#multi_index.indices, MI#multi_index.key_funs,
+    case try_insert_one(Val, MI#multi_index.indices,
             MI#multi_index.key_val_stores) of
         error -> error;
         {ok, KVSs} -> {ok, MI#multi_index{key_val_stores = KVSs}}
     end.
 
-try_insert_one(_V, [], [], []) -> {ok, []};
-try_insert_one(V, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
-    case try_insert_one(V, Idxs, KFs, KVSs) of
+try_insert_one(_V, [], []) -> {ok, []};
+try_insert_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
+    case try_insert_one(V, Idxs, KVSs) of
         {ok, KVSsNew} ->
             K = KF(V),
             case gb_trees:lookup(K, KVS) of
@@ -393,8 +394,8 @@ try_insert_one(V, [ordered_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
             end;
         error -> error
     end;
-try_insert_one(V, [ordered_non_unique | Idxs], [KF | KFs], [KVS | KVSs]) ->
-    case try_insert_one(V, Idxs, KFs, KVSs) of
+try_insert_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
+    case try_insert_one(V, Idxs, KVSs) of
         {ok, KVSsNew} ->
             K = KF(V),
             case gb_trees:lookup(K, KVS) of
