@@ -81,6 +81,8 @@
 -export([erase/3, fetch/3, fetch_all/3, from_list/2, indices/1, insert/2,
         new/1, replace/3, size/1, to_list/2, try_insert/2]).
 
+-compile(nowarn_unused_function).
+
 %% @type multi_index(). An opaque term representing a multi index.
 
 %% @type key_function() = function((term()) -> term()). A function which, when
@@ -99,9 +101,13 @@
 -type index() :: {ordered_unique, key_function()} |
     {ordered_non_unique, key_function()}.
 
+-type ordered_index() :: nil |
+    {l | e | r, ordered_index(), term(), ordered_index()}.
+
 -record(multi_index, {
+        n = 0 :: integer(),
         indices = [] :: [index()],
-        key_val_stores = [] :: [gb_tree()]}).
+        key_val_stores = [] :: [ordered_index()]}).
 
 -type multi_index() :: #multi_index{}.
 
@@ -116,46 +122,23 @@
 -spec erase(term(), integer(), multi_index()) -> multi_index().
 erase(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
         N =< length(MI#multi_index.indices) ->
-    Idx = lists:nth(N, MI#multi_index.indices),
+    {_IdxType, IdxFun} = lists:nth(N, MI#multi_index.indices),
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
-    case fetch_all_1(K, Idx, KVS) of
+    case ordered_fetch_list(K, IdxFun, KVS) of
         [] -> MI;
-        [V] -> MI#multi_index{
-                key_val_stores = erase_one(V, MI#multi_index.indices,
-                    MI#multi_index.key_val_stores)};
         Vs -> MI#multi_index{
-                key_val_stores = erase_all(
-                    lists:foldl(fun sets:add_element/2, sets:new(), Vs),
-                    MI#multi_index.indices, MI#multi_index.key_val_stores)}
+                n = MI#multi_index.n - length(Vs),
+                key_val_stores = erase_list(Vs, MI#multi_index.indices,
+                    MI#multi_index.key_val_stores)}
     end.
 
-erase_all(_, [], []) -> [];
-erase_all(VSet, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
-    [sets:fold(fun(V, KVS2) -> gb_trees:delete(KF(V), KVS2) end, KVS, VSet) |
-        erase_all(VSet, Idxs, KVSs)];
-erase_all(VSet, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
-    KSet = sets:fold(fun(V, KSet2) -> sets:add_element(KF(V), KSet2) end,
-        sets:new(), VSet),
-    KVSNew = sets:fold(fun(K, KVS2) ->
-                Vs = gb_trees:get(K, KVS2),
-                case lists:filter(
-                        fun(V) -> not sets:is_element(V, VSet) end, Vs) of
-                    [] -> KVS2;
-                    VsNew -> gb_trees:update(K, VsNew, KVS2)
-                end
-        end, KVS, KSet),
-    [KVSNew | erase_all(VSet, Idxs, KVSs)].
-
-erase_one(_, [], []) -> [];
-erase_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
-    [gb_trees:delete(KF(V), KVS) | erase_one(V, Idxs, KVSs)];
-erase_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
-    K = KF(V),
-    KVSNew = case lists:filter(fun(X) -> X =/= V end, gb_trees:get(K, KVS)) of
-        [] -> gb_trees:delete(K, KVS);
-        Vs -> gb_trees:update(K, Vs, KVS)
-    end,
-    [KVSNew | erase_one(V, Idxs, KVSs)].
+erase_list(_, [], []) -> [];
+erase_list(Vs, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
+    [lists:foldl(fun(V, KVS2) -> ordered_erase_value_unique(V, KF, KVS2) end,
+            KVS, Vs) | erase_list(Vs, Idxs, KVSs)];
+erase_list(Vs, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
+    [lists:foldl(fun(V, KVS2) -> ordered_erase_value_non_unique(V, KF, KVS2)
+            end, KVS, Vs) | erase_list(Vs, Idxs, KVSs)].
 
 
 %% @spec fetch(Key::Key, IndexNum::IndexNum, MI::MI) -> Value
@@ -172,15 +155,11 @@ erase_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
 -spec fetch(term(), integer(), multi_index()) -> term().
 fetch(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
         N =< length(MI#multi_index.indices) ->
-    Idx = lists:nth(N, MI#multi_index.indices),
+    {_IdxType, IdxFun} = lists:nth(N, MI#multi_index.indices),
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
-    fetch_one(K, Idx, KVS).
-
-fetch_one(K, {ordered_unique, _KF}, KVS) ->
-    gb_trees:get(K, KVS);
-fetch_one(K, {ordered_non_unique, _KF}, KVS) ->
-    [V | _] = gb_trees:get(K, KVS),
-    V.
+    try ordered_fetch_or_throw(K, IdxFun, KVS)
+    catch throw:badarg -> erlang:error(badarg, [K, N, MI])
+    end.
 
 
 %% @spec fetch_all(Key::Key, IndexNum::IndexNum, MI::MI) -> [Value]
@@ -196,20 +175,9 @@ fetch_one(K, {ordered_non_unique, _KF}, KVS) ->
 -spec fetch_all(term(), integer(), multi_index()) -> [term()].
 fetch_all(K, N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
         N =< length(MI#multi_index.indices) ->
-    Idx = lists:nth(N, MI#multi_index.indices),
+    {_IdxType, IdxFun} = lists:nth(N, MI#multi_index.indices),
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
-    fetch_all_1(K, Idx, KVS).
-
-fetch_all_1(K, {ordered_unique, _KF}, KVS) ->
-    case gb_trees:lookup(K, KVS) of
-        {value, V} -> [V];
-        none -> []
-    end;
-fetch_all_1(K, {ordered_non_unique, _KF}, KVS) ->
-    case gb_trees:lookup(K, KVS) of
-        {value, Vs} -> Vs;
-        none -> []
-    end.
+    ordered_fetch_list(K, IdxFun, KVS).
 
 
 %% @spec from_list(Values::Values, Indices::Indices) -> multi_index()
@@ -224,7 +192,9 @@ fetch_all_1(K, {ordered_non_unique, _KF}, KVS) ->
 %% @see new/1
 -spec from_list([term()], [index()]) -> multi_index().
 from_list(Vs, Indices) when length(Indices) > 0 ->
-    lists:foldl(fun insert/2, new(Indices), Vs).
+    try lists:foldl(fun insert/2, new(Indices), Vs)
+    catch throw:badarg -> erlang:error(badarg, [Vs, Indices])
+    end.
 
 
 %% @spec insert(Value::Value, MI::MI) -> multi_index()
@@ -237,23 +207,20 @@ from_list(Vs, Indices) when length(Indices) > 0 ->
 %% try_insert/2} instead.
 -spec insert(term(), multi_index()) -> multi_index().
 insert(Val, MI) ->
-    MI#multi_index{
-        key_val_stores = insert_one(Val, MI#multi_index.indices,
-            MI#multi_index.key_val_stores)}.
+    try MI#multi_index{
+            n = MI#multi_index.n + 1,
+            key_val_stores = insert_one(Val, MI#multi_index.indices,
+                MI#multi_index.key_val_stores)}
+    catch throw:badarg -> erlang:error(badarg, [Val, MI])
+    end.
 
 insert_one(_V, [], []) -> [];
 insert_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
-    [gb_trees:insert(KF(V), V, KVS) |
+    [ordered_insert_unique_or_throw(V, KF, KVS) |
         insert_one(V, Idxs, KVSs)];
 insert_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
-    K = KF(V),
-    case gb_trees:lookup(K, KVS) of
-        {value, Vals} ->
-            [gb_trees:update(K, [V | Vals], KVS) |
-                insert_one(V, Idxs, KVSs)];
-        none ->
-            [gb_trees:insert(K, [V], KVS) | insert_one(V, Idxs, KVSs)]
-    end.
+    [ordered_insert_non_unique(V, KF, KVS) |
+        insert_one(V, Idxs, KVSs)].
 
 
 %% @spec indices(MI::MI) -> [index()]
@@ -281,11 +248,11 @@ new(Indices) when length(Indices) > 0 ->
 add_index({ordered_unique, KeyFun}, MI) when is_function(KeyFun) ->
     #multi_index{
         indices = [{ordered_unique, KeyFun} | MI#multi_index.indices],
-        key_val_stores = [gb_trees:empty() | MI#multi_index.key_val_stores]};
+        key_val_stores = [ordered_new() | MI#multi_index.key_val_stores]};
 add_index({ordered_non_unique, KeyFun}, MI) when is_function(KeyFun) ->
     #multi_index{
         indices = [{ordered_non_unique, KeyFun} | MI#multi_index.indices],
-        key_val_stores = [gb_trees:empty() | MI#multi_index.key_val_stores]}.
+        key_val_stores = [ordered_new() | MI#multi_index.key_val_stores]}.
 
 
 %% @spec replace(Value1::Value1, Value2::Value2, MI::MI) -> multi_index()
@@ -298,33 +265,18 @@ add_index({ordered_non_unique, KeyFun}, MI) when is_function(KeyFun) ->
 %% otherwise.
 -spec replace(term(), term(), multi_index()) -> multi_index().
 replace(V1, V2, MI) when is_record(MI, multi_index) ->
-    MI#multi_index{key_val_stores = replace(V1, V2, MI#multi_index.indices,
-            MI#multi_index.key_val_stores)}.
+    try MI#multi_index{key_val_stores = replace(V1, V2, MI#multi_index.indices,
+                MI#multi_index.key_val_stores)}
+    catch throw:badarg -> erlang:error(badarg, [V1, V2, MI])
+    end.
 
 replace(_V1, _V2, [], []) -> {ok, []};
 replace(V1, V2, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
-    K = KF(V1),
-    case gb_trees:lookup(K, KVS) of
-        {value, V1} ->
-            [gb_trees:update(K, V2, KVS) | replace(V1, V2, Idxs, KVSs)];
-        _ -> erlang:error(badarg)
-    end;
+    [ordered_replace_value_unique_or_throw(V1, V2, KF, KVS) |
+        replace(V1, V2, Idxs, KVSs)];
 replace(V1, V2, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
-    K = KF(V1),
-    case gb_trees:lookup(K, KVS) of
-        {value, Vs} ->
-            case lists:mapfoldl(fun(V, E) ->
-                            case V =:= V1 of
-                                true -> {V2, ok};
-                                false -> {V, E}
-                            end end, error, Vs) of
-                {VsNew, ok} ->
-                    [gb_trees:update(K, VsNew, KVS) |
-                        replace(V1, V2, Idxs, KVSs)];
-                {_, error} -> erlang:error(badarg)
-            end;
-        none -> erlang:error(badarg)
-    end.
+    [ordered_replace_value_non_unique(V1, V2, KF, KVS) |
+        replace(V1, V2, Idxs, KVSs)].
 
 
 %% @spec size(MI::MI) -> integer()
@@ -333,14 +285,7 @@ replace(V1, V2, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
 %% <code>MI</code>.
 -spec size(multi_index()) -> integer().
 size(MI) when is_record(MI, multi_index) ->
-    [Idx | _] = MI#multi_index.indices,
-    [KVS | _] = MI#multi_index.key_val_stores,
-    size(Idx, KVS).
-
-size({ordered_unique, _KF}, KVS) ->
-    gb_trees:size(KVS);
-size({ordered_non_unique, _KF}, KVS) ->
-    lists:foldl(fun(L, A) -> A + length(L) end, 0, gb_trees:values(KVS)).
+    MI#multi_index.n.
 
 
 %% @spec to_list(IndexNum::IndexNum, MI::MI) -> [Value]
@@ -355,14 +300,8 @@ size({ordered_non_unique, _KF}, KVS) ->
 -spec to_list(integer(), multi_index()) -> [term()].
 to_list(N, MI) when is_record(MI, multi_index), is_integer(N), N > 0,
         N =< length(MI#multi_index.indices) ->
-    Idx = lists:nth(N, MI#multi_index.indices),
     KVS = lists:nth(N, MI#multi_index.key_val_stores),
-    to_list_1(Idx, KVS).
-
-to_list_1({ordered_unique, _KF}, KVS) ->
-    gb_trees:values(KVS);
-to_list_1({ordered_non_unique, _KF}, KVS) ->
-    lists:flatmap(fun(X) -> X end, gb_trees:values(KVS)).
+    ordered_to_list(KVS).
 
 
 %% @spec try_insert(Value::Value, MI1::MI1) -> {ok, MI2} | error
@@ -377,32 +316,283 @@ to_list_1({ordered_non_unique, _KF}, KVS) ->
 %% <code>error</code> is returned.
 -spec try_insert(term(), multi_index()) -> {'ok', multi_index()} | 'error'.
 try_insert(Val, MI) ->
-    case try_insert_one(Val, MI#multi_index.indices,
-            MI#multi_index.key_val_stores) of
-        error -> error;
-        {ok, KVSs} -> {ok, MI#multi_index{key_val_stores = KVSs}}
+    try {ok, MI#multi_index{
+                n = MI#multi_index.n + 1,
+                key_val_stores = insert_one(Val, MI#multi_index.indices,
+                    MI#multi_index.key_val_stores)}}
+    catch throw:badarg -> error
     end.
 
-try_insert_one(_V, [], []) -> {ok, []};
-try_insert_one(V, [{ordered_unique, KF} | Idxs], [KVS | KVSs]) ->
-    case try_insert_one(V, Idxs, KVSs) of
-        {ok, KVSsNew} ->
-            K = KF(V),
-            case gb_trees:lookup(K, KVS) of
-                {value, _} -> error;
-                none -> {ok, [gb_trees:insert(K, V, KVS) | KVSsNew]}
-            end;
-        error -> error
-    end;
-try_insert_one(V, [{ordered_non_unique, KF} | Idxs], [KVS | KVSs]) ->
-    case try_insert_one(V, Idxs, KVSs) of
-        {ok, KVSsNew} ->
-            K = KF(V),
-            case gb_trees:lookup(K, KVS) of
-                {value, Vals} ->
-                    {ok, [gb_trees:update(K, [V | Vals], KVS) | KVSsNew]};
-                none ->
-                    {ok, [gb_trees:insert(K, [V], KVS) | KVSsNew]}
-            end;
-        error -> error
+
+%% implementation of ordered indices using AVL trees
+
+ordered_new() -> nil.
+
+ordered_fetch_or_throw(_K, _KF, nil) ->
+    throw(badarg);
+ordered_fetch_or_throw(K, KF, {_, L, V, R}) ->
+    KV = KF(V),
+    if
+        K < KV -> ordered_fetch_or_throw(K, KF, L);
+        K > KV -> ordered_fetch_or_throw(K, KF, R);
+        K == KV -> V
     end.
+
+ordered_fetch_list(K, KF, T) ->
+    ordered_fetch_list(K, KF, T, []).
+
+ordered_fetch_list(_K, _KF, nil, A) ->
+    A;
+ordered_fetch_list(K, KF, {_, L, V, R}, A) ->
+    KV = KF(V),
+    if
+        K < KV -> ordered_fetch_list(K, KF, L, A);
+        K > KV -> ordered_fetch_list(K, KF, R, A);
+        K == KV -> ordered_fetch_list(K, KF, L,
+                [V | ordered_fetch_list(K, KF, R, A)])
+    end.
+
+ordered_insert_unique_or_throw(V, KF, T) ->
+    ordered_insert_unique_or_throw(KF(V), V, KF, T).
+
+ordered_insert_unique_or_throw(_KVin, Vin, _KF, nil) ->
+    {e, nil, Vin, nil};
+ordered_insert_unique_or_throw(KVin, Vin, KF, {B, L, V, R}) ->
+    KV = KF(V),
+    if
+        KVin < KV ->
+            Lnew = ordered_insert_unique_or_throw(KVin, Vin, KF, L),
+            case insert_increased_height(L, Lnew) of
+                true -> balance({leftmore_bal_factor(B), Lnew, V, R});
+                false -> {B, Lnew, V, R}
+            end;
+        KVin > KV ->
+            Rnew = ordered_insert_unique_or_throw(KVin, Vin, KF, R),
+            case insert_increased_height(R, Rnew) of
+                true -> balance({rightmore_bal_factor(B), L, V, Rnew});
+                false -> {B, L, V, Rnew}
+            end;
+        KVin == KV ->
+            throw(badarg)
+    end.
+
+ordered_insert_non_unique(V, KF, T) ->
+    ordered_insert_non_unique(KF(V), V, KF, T).
+
+ordered_insert_non_unique(_KVin, Vin, _KF, nil) ->
+    {e, nil, Vin, nil};
+ordered_insert_non_unique(KVin, Vin, KF, {B, L, V, R}) ->
+    KV = KF(V),
+    if
+        KVin < KV orelse (KVin == KV andalso Vin < V) ->
+            Lnew = ordered_insert_non_unique(KVin, Vin, KF, L),
+            case insert_increased_height(L, Lnew) of
+                true -> balance({leftmore_bal_factor(B), Lnew, V, R});
+                false -> {B, Lnew, V, R}
+            end;
+        KVin > KV orelse (KVin == KV andalso Vin >= V) ->
+            Rnew = ordered_insert_non_unique(KVin, Vin, KF, R),
+            case insert_increased_height(R, Rnew) of
+                true -> balance({rightmore_bal_factor(B), L, V, Rnew});
+                false -> {B, L, V, Rnew}
+            end
+    end.
+
+ordered_erase_value_unique(V, KF, T) ->
+    ordered_erase_value_unique(KF(V), V, KF, T).
+
+ordered_erase_value_unique(_KVin, _Vin, _KF, nil) ->
+    nil;
+ordered_erase_value_unique(KVin, Vin, KF, {B, L, V, R}) ->
+    KV = KF(V),
+    if
+        KVin < KV orelse (KVin == KV andalso Vin < V) ->
+            Lnew = ordered_erase_value_unique(KVin, Vin, KF, L),
+            case erase_decreased_height(L, Lnew) of
+                true -> balance({rightmore_bal_factor(B), Lnew, V, R});
+                false -> {B, Lnew, V, R}
+            end;
+        KVin > KV orelse (KVin == KV andalso Vin > V) ->
+            Rnew = ordered_erase_value_unique(KVin, Vin, KF, R),
+            case erase_decreased_height(R, Rnew) of
+                true -> balance({leftmore_bal_factor(B), L, V, Rnew});
+                false -> {B, L, V, Rnew}
+            end;
+        Vin == V ->
+            if
+                L == nil -> R;
+                R == nil -> L;
+                true ->
+                    {Vnew, Lnew} = erase_largest_node(L),
+                    case erase_decreased_height(L, Lnew) of
+                        true -> balance({rightmore_bal_factor(B),
+                                    Lnew, Vnew, R});
+                        false -> {B, Lnew, Vnew, R}
+                    end
+            end
+    end.
+
+ordered_erase_value_non_unique(V, KF, T) ->
+    case ordered_erase_value_non_unique(KF(V), V, KF, T) of
+        {more, Tnew} -> ordered_erase_value_non_unique(V, KF, Tnew);
+        {none, Tnew} -> Tnew
+    end.
+
+% can only erase values until a rebalance occurs, then must propagate it the
+% whole tree to erase another one.
+ordered_erase_value_non_unique(_KVin, _Vin, _KF, nil) ->
+    {none, nil};
+ordered_erase_value_non_unique(KVin, Vin, KF, {B, L, V, R}) ->
+    KV = KF(V),
+    if
+        KVin < KV orelse (KVin == KV andalso Vin < V) ->
+            {More, Lnew} = ordered_erase_value_non_unique(KVin, Vin, KF, L),
+            case erase_decreased_height(L, Lnew) of
+                true -> {More, balance({rightmore_bal_factor(B), Lnew, V, R})};
+                false -> {More, {B, Lnew, V, R}}
+            end;
+        KVin > KV orelse (KVin == KV andalso Vin > V) ->
+            {More, Rnew} = ordered_erase_value_non_unique(KVin, Vin, KF, R),
+            case erase_decreased_height(R, Rnew) of
+                true -> {More, balance({leftmore_bal_factor(B), L, V, Rnew})};
+                false -> {More, {B, L, V, Rnew}}
+            end;
+        Vin == V ->
+            if
+                L == nil -> {more, R};
+                R == nil -> {more, L};
+                true ->
+                    {Vnew, Lnew} = erase_largest_node(L),
+                    case erase_decreased_height(L, Lnew) of
+                        true -> {more, balance({rightmore_bal_factor(B),
+                                        Lnew, Vnew, R})};
+                        false -> ordered_erase_value_non_unique(KVin, Vin, KF,
+                                {B, Lnew, Vnew, R})
+                    end
+            end
+    end.
+
+% todo - see if this can be improved by only traversing the tree once and doing
+% both insert and delete
+ordered_replace_value_unique_or_throw(V1, V2, KF, T) ->
+    ordered_insert_unique_or_throw(V2, KF, ordered_erase_value_unique(V1, KF, T)).
+
+% todo - see if this can be improved by adding the duplicate values at once
+ordered_replace_value_non_unique(V1, V2, KF, T) ->
+    N = count_value(V1, KF, T),
+    T1 = ordered_erase_value_non_unique(V1, KF, T),
+    lists:foldl(fun(X, A) -> ordered_insert_non_unique(X, KF, A) end, T1,
+        lists:duplicate(N, V2)).
+
+count_value(V, KF, T) ->
+    count_value(KF(V), V, KF, T, 0).
+
+count_value(_KVin, _Vin, _KF, nil, A) ->
+    A;
+count_value(KVin, Vin, KF, {_, L, V, R}, A) ->
+    KV = KF(V),
+    if
+        KVin < KV -> count_value(KVin, Vin, KF, L, A);
+        KVin > KV -> count_value(KVin, Vin, KF, R, A);
+        Vin == V -> count_value(KVin, Vin, KF, L,
+                count_value(KVin, Vin, KF, R, A + 1));
+        KVin == KV -> count_value(KVin, Vin, KF, L,
+                count_value(KVin, Vin, KF, R, A))
+    end.
+
+
+erase_largest_node({_B, L, V, nil}) ->
+    {V, L};
+erase_largest_node({B, L, V, R}) ->
+    {Vnode, Rnew} = erase_largest_node(R),
+    case erase_decreased_height(R, Rnew) of
+        true -> {Vnode, balance({leftmore_bal_factor(B), L, V, Rnew})};
+        false -> {Vnode, {B, L, V, Rnew}}
+    end.
+
+insert_increased_height({e, _, _, _}, {l, _, _, _}) -> true;
+insert_increased_height({e, _, _, _}, {r, _, _, _}) -> true;
+insert_increased_height(nil, {_, _, _, _}) -> true;
+insert_increased_height(_, _) -> false.
+
+erase_decreased_height({l, _, _, _}, {e, _, _, _}) -> true;
+erase_decreased_height({r, _, _, _}, {e, _, _, _}) -> true;
+erase_decreased_height({_, _, _, _}, nil) -> true;
+erase_decreased_height(_, _) -> false.
+
+leftmore_bal_factor(l) -> ll;
+leftmore_bal_factor(e) -> l;
+leftmore_bal_factor(r) -> e.
+
+rightmore_bal_factor(l) -> e;
+rightmore_bal_factor(e) -> r;
+rightmore_bal_factor(r) -> rr.
+
+balance({ll, {l, LL, LV, LR}, V, R}) -> % left left
+    {e, LL, LV, {e, LR, V, R}};
+balance({ll, {r, LL, LV, {LRB, LRL, LRV, LRR}}, V, R}) -> % left right
+    case LRB of
+        l -> {e, {e, LL, LV, LRL}, LRV, {r, LRR, V, R}};
+        e -> {e, {e, LL, LV, LRL}, LRV, {e, LRR, V, R}};
+        r -> {e, {l, LL, LV, LRL}, LRV, {e, LRR, V, R}}
+    end;
+balance({rr, L, V, {r, RL, RV, RR}}) -> % right right
+    {e, {e, L, V, RL}, RV, RR};
+balance({rr, L, V, {l, {RLB, RLL, RLV, RLR}, RV, RR}}) -> % right left
+    case RLB of
+        l -> {e, {e, L, V, RLL}, RLV, {r, RLR, RV, RR}};
+        e -> {e, {e, L, V, RLL}, RLV, {e, RLR, RV, RR}};
+        r -> {e, {l, L, V, RLL}, RLV, {e, RLR, RV, RR}}
+    end;
+balance({ll, {e, LL, LV, LR}, V, R}) -> % left even (only during deletion)
+    {r, LL, LV, {l, LR, V, R}};
+balance({rr, L, V, {e, RL, RV, RR}}) -> % right even (only during deletion)
+    {l, {r, L, V, RL}, RV, RR};
+balance(T) -> % no balancing needed
+    T.
+
+ordered_check_balance(T) ->
+    case check_balance_2(T) of
+        {ok, _} -> true;
+        error -> false
+    end.
+
+check_balance_2(nil) ->
+    {ok, 0};
+check_balance_2({l, L, _, R}) ->
+    case {check_balance_2(L), check_balance_2(R)} of
+        {{ok, LBal}, {ok, RBal}} ->
+            if  LBal == RBal + 1 -> {ok, LBal + 1};
+                true -> error
+            end;
+        {error, _} -> error;
+        {_, error} -> error
+    end;
+check_balance_2({e, L, _, R}) ->
+    case {check_balance_2(L), check_balance_2(R)} of
+        {{ok, LBal}, {ok, RBal}} ->
+            if  LBal == RBal -> {ok, LBal + 1};
+                true -> error
+            end;
+        {error, _} -> error;
+        {_, error} -> error
+    end;
+check_balance_2({r, L, _, R}) ->
+    case {check_balance_2(L), check_balance_2(R)} of
+        {{ok, LBal}, {ok, RBal}} ->
+            if  LBal + 1 == RBal -> {ok, RBal + 1};
+                true -> error
+            end;
+        {error, _} -> error;
+        {_, error} -> error
+    end;
+check_balance_2(_) ->
+    error.
+
+ordered_to_list(T) ->
+    ordered_to_list(T, []).
+
+ordered_to_list(nil, A) ->
+    A;
+ordered_to_list({_, L, V, R}, A) ->
+    ordered_to_list(L, [V | ordered_to_list(R, A)]).
