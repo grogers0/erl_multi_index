@@ -1,3 +1,4 @@
 tags
 ebin/*.beam
 erl_crash.dump
+current_counterexample.eqc
